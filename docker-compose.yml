@@ -26,16 +26,55 @@ services:
       - ./data/export:/export
     command: python export_to_csv.py
 
-  pig:
+  pig-processor:
     image: sequenceiq/pig:latest
-    container_name: tarea2-sd-pig
+    container_name: tarea2-sd-pig-processor
     volumes:
       - ./data:/data
       - ./pig-scripts:/scripts
     working_dir: /scripts
-    command: pig clean_and_classify_csv.pig
+    environment:
+      - PIG_HOME=/usr/local/pig
+      - JAVA_HOME=/usr/lib/jvm/java-7-openjdk-amd64
     depends_on:
       - exporter
+    command: >
+      bash -c "
+        echo 'Iniciando procesamiento con Apache Pig...' &&
+        mkdir -p /data/processed &&
+        echo 'Verificando archivos de entrada...' &&
+        ls -la /data/export/ &&
+        echo 'Ejecutando script de Pig...' &&
+        pig -x local clean_and_classify_csv.pig &&
+        echo 'Procesamiento completado. Listando resultados:' &&
+        find /data/processed -type f -name '*' | head -20
+      "
+
+  # Servicio alternativo con imagen de Hadoop que incluye Pig
+  pig-hadoop:
+    image: sequenceiq/hadoop-docker:2.7.0
+    container_name: tarea2-sd-pig-hadoop
+    volumes:
+      - ./data:/data
+      - ./pig-scripts:/scripts
+    working_dir: /scripts
+    environment:
+      - CLUSTER_NAME=test
+    depends_on:
+      - exporter
+    command: >
+      bash -c "
+        echo 'Instalando Apache Pig...' &&
+        cd /opt &&
+        wget -q https://archive.apache.org/dist/pig/pig-0.17.0/pig-0.17.0.tar.gz &&
+        tar -xzf pig-0.17.0.tar.gz &&
+        export PIG_HOME=/opt/pig-0.17.0 &&
+        export PATH=\$PATH:\$PIG_HOME/bin &&
+        echo 'Pig instalado correctamente' &&
+        mkdir -p /data/processed &&
+        cd /scripts &&
+        pig -x local clean_and_classify_csv.pig
+      "
 
 volumes:
   mongo_data:
