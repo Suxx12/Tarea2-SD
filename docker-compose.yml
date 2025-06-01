@@ -1,0 +1,41 @@
+version: '3.9'
+
+services:
+  mongo:
+    image: mongo:5.0
+    container_name: tarea2-sd-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./data/export:/export
+    restart: always
+
+  exporter:
+    build:
+      context: ./scraper
+    container_name: tarea2-sd-exporter
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/
+      - DB_NAME=waze_data
+      - COLLECTION_NAME=waze_events
+    depends_on:
+      - mongo
+    volumes:
+      - ./scraper:/app
+      - ./data/export:/export
+    command: python export_to_csv.py
+
+  pig:
+    image: sequenceiq/pig:latest
+    container_name: tarea2-sd-pig
+    volumes:
+      - ./data:/data
+      - ./pig-scripts:/scripts
+    working_dir: /scripts
+    command: pig clean_and_classify_csv.pig
+    depends_on:
+      - exporter
+
+volumes:
+  mongo_data:
