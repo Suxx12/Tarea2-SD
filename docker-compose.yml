@@ -27,53 +27,58 @@ services:
     command: python export_to_csv.py
 
   pig-processor:
-    image: sequenceiq/pig:latest
+    build:
+      context: ./pig
     container_name: tarea2-sd-pig-processor
     volumes:
       - ./data:/data
       - ./pig-scripts:/scripts
     working_dir: /scripts
     environment:
-      - PIG_HOME=/usr/local/pig
-      - JAVA_HOME=/usr/lib/jvm/java-7-openjdk-amd64
+      - PIG_HOME=/opt/pig
+      - HADOOP_HOME=/opt/hadoop
+      - JAVA_HOME=/usr/local/openjdk-8
+      - PIG_TEMP_DIR=/tmp/pig
     depends_on:
       - exporter
     command: >
       bash -c "
-        echo 'Iniciando procesamiento con Apache Pig...' &&
+        echo 'Esperando archivos de entrada...' &&
+        while [ ! -f /data/export/waze_incidents.csv ]; do
+          echo 'Esperando CSV...'
+          sleep 5
+        done &&
+        echo 'Archivo CSV encontrado. Iniciando procesamiento con Apache Pig...' &&
         mkdir -p /data/processed &&
         echo 'Verificando archivos de entrada...' &&
         ls -la /data/export/ &&
+        head -5 /data/export/waze_incidents.csv &&
         echo 'Ejecutando script de Pig...' &&
         pig -x local clean_and_classify_csv.pig &&
         echo 'Procesamiento completado. Listando resultados:' &&
-        find /data/processed -type f -name '*' | head -20
+        find /data/processed -type f -name 'part-*' | head -10
       "
 
-  # Servicio alternativo con imagen de Hadoop que incluye Pig
-  pig-hadoop:
-    image: sequenceiq/hadoop-docker:2.7.0
-    container_name: tarea2-sd-pig-hadoop
+  analyzer:
+    image: python:3.9-slim
+    container_name: tarea2-sd-analyzer
     volumes:
       - ./data:/data
-      - ./pig-scripts:/scripts
-    working_dir: /scripts
-    environment:
-      - CLUSTER_NAME=test
+      - ./analysis:/app
+    working_dir: /app
     depends_on:
-      - exporter
+      - pig-processor
     command: >
       bash -c "
-        echo 'Instalando Apache Pig...' &&
-        cd /opt &&
-        wget -q https://archive.apache.org/dist/pig/pig-0.17.0/pig-0.17.0.tar.gz &&
-        tar -xzf pig-0.17.0.tar.gz &&
-        export PIG_HOME=/opt/pig-0.17.0 &&
-        export PATH=\$PATH:\$PIG_HOME/bin &&
-        echo 'Pig instalado correctamente' &&
-        mkdir -p /data/processed &&
-        cd /scripts &&
-        pig -x local clean_and_classify_csv.pig
+        echo 'Instalando dependencias para análisis...' &&
+        pip install pandas matplotlib seaborn &&
+        echo 'Esperando resultados del procesamiento...' &&
+        while [ ! -d /data/processed/clean_incidents ]; do
+          echo 'Esperando resultados de Pig...'
+          sleep 10
+        done &&
+        echo 'Ejecutando análisis post-procesamiento...' &&
+        python post_analysis.py
       "
 
 volumes:
