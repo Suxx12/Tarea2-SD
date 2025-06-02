@@ -11,6 +11,132 @@ services:
       - ./data/export:/export
     restart: always
 
+  redis:
+    image: redis:latest
+    container_name: tarea2-sd-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--maxmemory", "100mb", "--maxmemory-policy", "allkeys-lru"]
+    restart: always
+
+  scraper:
+    build:
+      context: ./scraper
+    container_name: tarea2-sd-scraper
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/
+      - DB_NAME=waze_data
+    depends_on:
+      - mongo
+    volumes:
+      - ./scraper:/app
+      - ./data/export:/export
+    command: python scraper.py
+    stdin_open: true
+    tty: true
+
+  api:
+    build:
+      context: ./scraper
+    container_name: tarea2-sd-api
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_NAME=waze_data
+    depends_on:
+      - mongo
+      - redis
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./scraper:/app
+    command: python server.py
+    restart: always
+
+  # Hadoop NameNode
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: tarea2-sd-namenode
+    restart: always
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=test
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    env_file:
+      - ./hadoop.env
+
+  # Hadoop DataNode
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: tarea2-sd-datanode
+    restart: always
+    volumes:
+      - hadoop_datanode:/hadoop/dfs/data
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    depends_on:
+      - namenode
+    env_file:
+      - ./hadoop.env
+
+  # Hadoop ResourceManager
+  resourcemanager:
+    image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    container_name: tarea2-sd-resourcemanager
+    restart: always
+    environment:
+      - SERVICE_PRECONDITION=namenode:9000 namenode:9870 datanode:9864
+    depends_on:
+      - namenode
+      - datanode
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "8088:8088"
+
+  # Hadoop NodeManager
+  nodemanager1:
+    image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    container_name: tarea2-sd-nodemanager
+    restart: always
+    environment:
+      - SERVICE_PRECONDITION=namenode:9000 namenode:9870 datanode:9864 resourcemanager:8088
+    depends_on:
+      - namenode
+      - datanode
+      - resourcemanager
+    env_file:
+      - ./hadoop.env
+
+  # Contenedor personalizado con Pig
+  pig:
+    build:
+      context: ./pig
+    container_name: tarea2-sd-pig
+    restart: always
+    volumes:
+      - ./scripts:/scripts
+      - ./data/export:/input
+      - ./data/output:/output
+    environment:
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    depends_on:
+      - namenode
+      - datanode
+      - resourcemanager
+      - nodemanager1
+    stdin_open: true
+    tty: true
+    command: tail -f /dev/null
+
+  # Servicio para exportar datos de Mongo a CSV
   exporter:
     build:
       context: ./scraper
@@ -26,60 +152,11 @@ services:
       - ./data/export:/export
     command: python export_to_csv.py
 
-  pig-processor:
-    build:
-      context: ./pig
-    container_name: tarea2-sd-pig-processor
-    volumes:
-      - ./data:/data
-      - ./pig-scripts:/scripts
-    working_dir: /scripts
-    environment:
-      - PIG_HOME=/opt/pig
-      - HADOOP_HOME=/opt/hadoop
-      - JAVA_HOME=/usr/local/openjdk-8
-      - PIG_TEMP_DIR=/tmp/pig
-    depends_on:
-      - exporter
-    command: >
-      bash -c "
-        echo 'Esperando archivos de entrada...' &&
-        while [ ! -f /data/export/waze_incidents.csv ]; do
-          echo 'Esperando CSV...'
-          sleep 5
-        done &&
-        echo 'Archivo CSV encontrado. Iniciando procesamiento con Apache Pig...' &&
-        mkdir -p /data/processed &&
-        echo 'Verificando archivos de entrada...' &&
-        ls -la /data/export/ &&
-        head -5 /data/export/waze_incidents.csv &&
-        echo 'Ejecutando script de Pig...' &&
-        pig -x local clean_and_classify_csv.pig &&
-        echo 'Procesamiento completado. Listando resultados:' &&
-        find /data/processed -type f -name 'part-*' | head -10
-      "
-
-  analyzer:
-    image: python:3.9-slim
-    container_name: tarea2-sd-analyzer
-    volumes:
-      - ./data:/data
-      - ./analysis:/app
-    working_dir: /app
-    depends_on:
-      - pig-processor
-    command: >
-      bash -c "
-        echo 'Instalando dependencias para análisis...' &&
-        pip install pandas matplotlib seaborn &&
-        echo 'Esperando resultados del procesamiento...' &&
-        while [ ! -d /data/processed/clean_incidents ]; do
-          echo 'Esperando resultados de Pig...'
-          sleep 10
-        done &&
-        echo 'Ejecutando análisis post-procesamiento...' &&
-        python post_analysis.py
-      "
-
 volumes:
   mongo_data:
+  hadoop_namenode:
+  hadoop_datanode:
+
+networks:
+  default:
+    driver: bridge
