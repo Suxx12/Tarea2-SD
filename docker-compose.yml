@@ -121,7 +121,7 @@ services:
     container_name: tarea2-sd-pig
     restart: always
     volumes:
-      - ./scripts:/scripts
+      - ./pig-scripts:/scripts
       - ./data/export:/input
       - ./data/output:/output
     environment:
